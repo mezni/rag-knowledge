@@ -53,9 +53,83 @@ async fn main() -> Result<()> {
     let mut timestamps: Vec<String> = Vec::new();
     let mut session_ids: Vec<String> = Vec::new();
 
-    // Process syslog inputs
+    let mut input_batch: Vec<&str> = Vec::new();
+    let batch_size = 100;
+
+    // Process syslog inputs in batches of 100
     for input in inputs {
-        match process_syslog(input, &syslog_config, &mut timestamps, &mut session_ids) {
+        input_batch.push(input);
+
+        // Once we have 100 inputs, process them and generate a DataFrame
+        if input_batch.len() == batch_size {
+            process_batch(&input_batch, &syslog_config, &mut timestamps, &mut session_ids)?;
+            
+            // Convert to Arrow arrays
+            let timestamp_array = StringArray::from(timestamps.clone());
+            let session_id_array = StringArray::from(session_ids.clone());
+
+            // Create Arrow RecordBatch
+            let data = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(timestamp_array) as ArrayRef,
+                    Arc::new(session_id_array) as ArrayRef,
+                ],
+            )?;
+
+            // Do something with the RecordBatch, e.g., print it
+            println!("RecordBatch created with {} rows", data.num_rows());
+
+            // Use SessionContext to work with the data
+            let ctx = SessionContext::new();
+            let df = ctx.read_batch(data)?; // Use read_batch instead of create_dataframe
+            df.clone().show_limit(10).await?;
+
+            // Clear the batch for next set of 100 inputs
+            input_batch.clear();
+            timestamps.clear();
+            session_ids.clear();
+        }
+    }
+
+    // If there are remaining inputs less than 100
+    if !input_batch.is_empty() {
+        process_batch(&input_batch, &syslog_config, &mut timestamps, &mut session_ids)?;
+
+        // Convert to Arrow arrays
+        let timestamp_array = StringArray::from(timestamps.clone());
+        let session_id_array = StringArray::from(session_ids.clone());
+
+        // Create Arrow RecordBatch
+        let data = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(timestamp_array) as ArrayRef,
+                Arc::new(session_id_array) as ArrayRef,
+            ],
+        )?;
+
+        // Do something with the RecordBatch, e.g., print it
+        println!("RecordBatch created with {} rows", data.num_rows());
+
+        // Use SessionContext to work with the data
+        let ctx = SessionContext::new();
+        let df = ctx.read_batch(data)?; // Use read_batch instead of create_dataframe
+        df.clone().show_limit(10).await?;
+    }
+
+    Ok(())
+}
+
+// Function to process a batch of syslog input
+fn process_batch(
+    input_batch: &[&str],
+    syslog_config: &HashMap<String, (String, Vec<String>)>,
+    timestamps: &mut Vec<String>,
+    session_ids: &mut Vec<String>,
+) -> Result<(), String> {
+    for input in input_batch {
+        match process_syslog(input, syslog_config, timestamps, session_ids) {
             Ok(()) => {
                 println!("Timestamp extracted: {}", timestamps.last().unwrap());
                 println!("Session ID extracted: {}", session_ids.last().unwrap());
@@ -63,36 +137,6 @@ async fn main() -> Result<()> {
             Err(err) => eprintln!("Error processing syslog: {}", err),
         }
     }
-
-    // Convert to Arrow arrays
-    let timestamp_array = StringArray::from(timestamps);
-    let session_id_array = StringArray::from(session_ids);
-
-    // Create Arrow RecordBatch
-    let data = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![
-            Arc::new(timestamp_array) as ArrayRef,
-            Arc::new(session_id_array) as ArrayRef,
-        ],
-    )?;
-
-    // Do something with the RecordBatch, e.g., print it
-    println!("RecordBatch created with {} rows", data.num_rows());
-
-    // Use SessionContext to work with the data
-    let ctx = SessionContext::new();
-    let df = ctx.read_batch(data)?; // Use read_batch instead of create_dataframe
-    df.clone().show_limit(10).await?;
-    // Perform filtering (e.g., session IDs >= 8000)
-    //let filtered_df = dataframe.filter(col("session_id").gt_eq(lit("8000")))?;
-
-    // Show the results
-    //let results = filtered_df.collect().await?;
-    //for batch in results {
-    //    println!("{:?}", batch);
-    //}
-
     Ok(())
 }
 
