@@ -215,3 +215,80 @@ Tests use temporary files to verify text ingestion (correct id, content, and fil
 | Poor extraction | Content-quality validation |
 
 **Architecture decision:** keep ingestion and indexing separate. Ingestion extracts and normalizes content; indexing chunks documents, generates embeddings, and stores them. This separation allows re-indexing with a new embedding model without repeatedly parsing every source file.
+
+---
+
+## Day 3 — Chunking Strategies & Document Segmentation
+
+**Day 3 of 12** · **2 hours** · **Hands-on Lab**
+
+**Objective:** Learn how to transform large documents into smaller, meaningful, retrieval-friendly chunks while preserving context and document structure. Build a reusable chunking engine in plain Python.
+
+### 1. The problem being solved
+
+Day 2 built ingestion that extracts text from PDF, DOCX, HTML, JSON, and TXT files. But a company might have a 200-page refund policy, and a user asks a narrow question such as "How many days does a customer have to request a refund?" Sending the whole document to an LLM causes high token consumption, higher inference cost, irrelevant context, difficulty retrieving specific facts, context-window limits, and reduced retrieval precision.
+
+**Solution:** divide documents into smaller pieces called chunks. The real challenge is splitting text without losing meaning.
+
+### 2. What a chunk is
+
+A chunk is a smaller segment of a document that can be embedded, indexed, retrieved, and passed to an LLM independently. A refund policy can be split into four chunks covering, respectively, the 30-day refund window, original-condition requirement, five-business-day processing time, and how to contact support. Each chunk becomes an independently searchable knowledge unit.
+
+### 3. Chunking strategies
+
+| Strategy | How it works | Advantages | Drawbacks | Best for |
+| --- | --- | --- | --- | --- |
+| Fixed-size | Splits by a fixed number of characters or tokens | Simple, predictable sizes, fast | Can split sentences and paragraphs, loses context | Simple documents and prototypes |
+| Recursive character | Tries separators in order: paragraph, line, sentence, word, character | Preserves paragraphs where possible, natural chunks, good general purpose | Medium complexity | General document collections |
+| Sentence-based | Splits on complete sentences, optionally grouping several per chunk | Preserves sentence boundaries, fewer incomplete statements | Variable sentence lengths, context between sentences may be lost | FAQs and knowledge articles |
+| Semantic | Uses embeddings to split where meaning or topic changes | Meaning-oriented segmentation, better relevance | Expensive, requires embeddings and threshold tuning | Complex enterprise documentation |
+| Parent-child | Stores larger parent chunks for context alongside smaller child chunks for retrieval; retrieve the child, pass its parent context to the LLM | Strong context preservation | High complexity | Long technical docs, contracts, enterprise policies |
+
+### 4. Chunk overlap
+
+Overlap keeps neighboring chunks sharing some text so a sentence near a boundary does not lose context. With a chunk size of 500 characters and overlap of 100, each new chunk contributes 400 characters of new text. Excessive overlap causes duplicate content, higher embedding cost, larger vector databases, and redundant retrieval results. Chunk size and overlap are tunable parameters, not universal constants.
+
+### 5. Chunk metadata
+
+Each chunk keeps its relationship to the original document through fields such as `chunk_id` (unique identifier), `document_id` (source document), `content`, `source` (original file), `page_number`, `chunk_index` (position in document), `parent_id` (parent chunk reference for parent-child setups), and a general `metadata` dictionary for extra attributes. This metadata becomes important later for vector databases and filtering.
+
+### 6. Hands-on lab: chunking engine
+
+The lab implements three strategies in plain Python — fixed-size, sentence-based, and recursive character chunking — with a `Chunk` dataclass (id, document_id, content, chunk_index, metadata) as the common representation and a dedicated `chunking` package alongside `parsers` and `ingestion`.
+
+| Component | Behavior |
+| --- | --- |
+| Fixed-size | Validates positive chunk size and overlap below chunk size; steps forward by `chunk_size - overlap`; records start/end character offsets and strategy in metadata |
+| Sentence-based | Splits on sentence-ending punctuation with a regex, drops empty sentences, groups up to `max_sentences` per chunk; production versions must handle abbreviations, decimals, multilingual text, and complex punctuation |
+| Recursive | Tries separators from paragraphs down to characters, falls back to raw slicing; this educational version does not yet implement overlap or exact character offsets |
+
+Unit tests cover fixed-size chunk counts, sizes and ids, invalid size and overlap errors, sentence grouping, and recursive chunk limits and count. Verification: `uv run pytest` and `uv run ruff check .`.
+
+### 7. Strategy comparison
+
+| Strategy | Context preservation | Complexity | Best use |
+| --- | --- | --- | --- |
+| Fixed-size | Low–Medium | Low | Simple text |
+| Sentence-based | Medium–High | Low | FAQs |
+| Recursive | High | Medium | General documents |
+| Semantic | High | High | Complex knowledge |
+| Parent-child | High | High | Enterprise documents |
+
+These are general tendencies, not guaranteed retrieval-performance rankings.
+
+### 8. Optimization trade-offs and common problems
+
+Starting points for experiments: chunk size 300–800 tokens, overlap 10–20%, top-K 3–5 chunks, recursive strategy, metadata with source/document ID/page, and the same embedding model for documents and queries. The current Python implementations measure chunk size in **characters**, not tokens; a production system should use tokenizer-based limits because models process tokens.
+
+| Problem | Consequence | Solution |
+| --- | --- | --- |
+| Chunks too small | Missing context | Increase chunk size |
+| Chunks too large | Irrelevant information | Reduce chunk size |
+| No overlap | Boundary information lost | Introduce overlap |
+| Excessive overlap | Duplicate retrieval | Reduce overlap |
+| Broken tables | Lost relationships | Structure-aware parsing |
+| Lost headings | Ambiguous chunks | Preserve document hierarchy |
+
+### 9. Production architecture evolution
+
+The pipeline now has three distinct stages: **source documents → document ingestion → normalized documents → chunking engine → chunk validation → chunk metadata → ready for embeddings**. Embeddings and vector storage have not been implemented yet; that is the next stage.
