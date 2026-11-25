@@ -9,17 +9,17 @@ def retrieve(
     results = []
 
     for document in documents:
-        content_words = set(
-            document["content"].lower().split()
-        )
+        content_words = set(document["content"].lower().split())
 
         score = len(query_words & content_words)
 
         if score > 0:
-            results.append({
-                **document,
-                "score": score,
-            })
+            results.append(
+                {
+                    **document,
+                    "score": score,
+                }
+            )
 
     results.sort(
         key=lambda document: document["score"],
