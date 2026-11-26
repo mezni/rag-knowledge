@@ -383,3 +383,107 @@ Activation and archival must be atomic in persistent storage in production, with
 | Auditability | Lifecycle event history |
 
 **Critical security point:** metadata filtering is not authorization. Access control must be enforced by trusted server-side identity and authorization logic before chunks are returned.
+
+---
+
+## Day 5 — Embeddings Engineering
+
+**Day 5 of 12** · **2 hours** · **Hands-on Lab**
+
+**Objective:** Understand how text is converted into numerical vectors, how semantic similarity works, and how embedding models enable retrieval based on meaning rather than exact keyword matches.
+
+### 1. The problem being solved
+
+The current retriever uses keyword matching, which fails when the question uses different words from the document: "How long do I have to send something back?" should match "Customers can return purchased products within 30 days." despite sharing few words.
+
+**Solution:** embeddings — numerical representations that capture semantic information, so similar meanings have nearby vectors and different meanings are farther apart.
+
+### 2. What embeddings are
+
+An embedding is a vector representing text, images, or other data (e.g. `[0.12, -0.34, 0.89, ...]`). Real embeddings contain hundreds or thousands of dimensions, and retrieval systems compare vectors to find relevant content.
+
+### 3. How embeddings work
+
+**Input Text → Tokenizer → Embedding Model → Numerical Vector → Vector Representation.** The tokenizer converts text into tokens, the model processes them and produces a vector. Models learn useful representations during training; they do not assign one fixed number per word.
+
+### 4. Embedding dimensions
+
+Illustrative configurations: small models 384 dimensions, medium 768, larger 1,536, some advanced 3,072. Dimensions are the number of values in each vector; the chosen model determines the vector column or collection configuration in the vector database.
+
+**Important:** embeddings from different models generally cannot be compared directly — use the same compatible model and configuration for documents and queries.
+
+### 5. Semantic similarity
+
+Compare embeddings with cosine similarity (angle between vectors), dot product (common with normalized embeddings), or Euclidean distance (smaller = closer).
+
+| Score (cosine) | Interpretation |
+| --- | --- |
+| Close to 1 | Similar direction |
+| Close to 0 | Approximately orthogonal |
+| Close to -1 | Opposite direction |
+
+Cosine similarity is a useful retrieval metric for many models, but a high score does not guarantee the document answers the question.
+
+### 6. Embedding model selection
+
+| Criterion | Why it matters |
+| --- | --- |
+| Retrieval quality | Finds relevant documents |
+| Dimensions | Determines storage requirements |
+| Latency | Affects query performance |
+| Cost | Affects operating expenses |
+| Language support | Handles multilingual documents |
+| Context length | Handles longer inputs |
+| Domain performance | Handles specialized terminology |
+
+Model families: Sentence Transformers (local), OpenAI Embeddings (hosted), BGE (open), and E5 (retrieval-focused).
+
+### 7. Hands-on lab: embedding service
+
+The lab adds `sentence-transformers` and `numpy`, then builds an `embeddings` package with a provider interface, a Sentence Transformer implementation, similarity utilities, experiments, and tests.
+
+| Component | Behavior |
+| --- | --- |
+| `EmbeddingProvider` protocol | `embed_documents(texts)` and `embed_query(text)`; decouples the app from any specific provider (dependency inversion) |
+| `SentenceTransformerProvider` | Uses `all-MiniLM-L6-v2` (384 dimensions), batches document embeddings, embeds queries separately, normalizes vectors, returns Python lists, rejects empty queries |
+| `cosine_similarity` | NumPy-based; validates one-dimensional, equal-shape, nonzero vectors |
+| Experiments | Ranks four sample documents against "How long do I have to return my purchase?"; refund/return documents should rank above shipping/support |
+| Tests | Identical/orthogonal vectors, dimension mismatch and zero-vector errors, 384-dimensional embeddings, empty-query rejection |
+
+Dependencies: `uv add sentence-transformers numpy`. Verification: `uv run python -m rag_knowledge.embeddings.experiments`, `uv run pytest`, `uv run ruff check .`. The model downloads on first load, so service tests need internet access initially; keep them separate from fast unit tests in production suites.
+
+### 8. Vector normalization
+
+With `normalize_embeddings=True`, vectors have magnitude 1, so cosine similarity equals the dot product and ranking results are equivalent — simplifying similarity calculations and vector database configuration. Normalization does not automatically improve every model; the metric should match how the model was trained and evaluated.
+
+### 9. Embedding storage considerations
+
+100,000 chunks × 384 dimensions × 4 bytes (float32) ≈ 146.5 MiB of raw vector storage. This excludes vector index overhead, metadata, original content, database overhead, replication, and backups — dimensions and storage formats matter at scale.
+
+### 10. Embedding model comparison
+
+| Model | Provider | Dimensions |
+| --- | --- | --- |
+| all-MiniLM-L6-v2 | Sentence Transformers | 384 |
+| all-mpnet-base-v2 | Sentence Transformers | 768 |
+| BGE-small-en-v1.5 | BAAI | 384 |
+| BGE-base-en-v1.5 | BAAI | 768 |
+| OpenAI text-embedding-3-small | OpenAI | 1,536 default |
+| OpenAI text-embedding-3-large | OpenAI | 3,072 default |
+
+Start with all-MiniLM-L6-v2, experiment with BGE, compare retrieval quality, then evaluate hosted APIs. Do not select a model on dimensions alone.
+
+### 11. Production embedding engineering
+
+| Concern | Production solution |
+| --- | --- |
+| Large collections | Batch embedding |
+| Repeated documents | Embedding cache |
+| Model changes | Model versioning |
+| API failures | Retry and timeout policies |
+| High latency | Batching and asynchronous processing |
+| Cost | Model selection and caching |
+| Vector compatibility | Dimension validation |
+| Data privacy | Controlled processing and storage |
+
+**Architecture decision:** track `embedding_model`, `embedding_version`, `embedding_dimension`, and `normalization` with each vector. Vectors from different models (e.g. MiniLM vs BGE) must not be mixed in the same retrieval space — plan re-embedding and re-indexing when switching models.
