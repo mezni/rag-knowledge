@@ -292,3 +292,94 @@ Starting points for experiments: chunk size 300–800 tokens, overlap 10–20%, 
 ### 9. Production architecture evolution
 
 The pipeline now has three distinct stages: **source documents → document ingestion → normalized documents → chunking engine → chunk validation → chunk metadata → ready for embeddings**. Embeddings and vector storage have not been implemented yet; that is the next stage.
+
+---
+
+## Day 4 — Metadata Engineering & Document Lifecycle Management
+
+**Day 4 of 12** · **2 hours** · **Hands-on Lab**
+
+**Objective:** Build a reliable metadata and document lifecycle management system that tracks document identity, ownership, versions, updates, duplicates, and relationships between documents and chunks.
+
+### 1. The problem being solved
+
+In an enterprise RAG system with 100,000 documents, a refund policy may be updated from "refunds within 30 days" to "refunds within 45 days" while the old version remains indexed. An employee asking "What is the current refund period?" then receives outdated information. Related problems: duplicate documents, missing ownership, no version history, no way to trace a chunk to its document, no department filtering, and unauthorized retrieval of confidential content.
+
+**Solution:** implement document metadata management and lifecycle tracking.
+
+### 2. Document metadata
+
+Metadata is structured information *describing* a document (identity, title, source, department, version, status, timestamps, access level), not its actual content. It enables filtering, tracking, governance, and retrieval.
+
+| Category | Examples | Purpose |
+| --- | --- | --- |
+| Identity | `document_id`, `source` | Identify documents |
+| Descriptive | `title`, `description` | Understand content |
+| Organizational | `department`, `owner` | Business classification |
+| Temporal | `created_at`, `updated_at` | Track changes |
+| Versioning | `version`, `content_hash` | Track revisions |
+| Security | `access_level`, `tenant_id` | Control access |
+| Technical | `file_type`, `file_size` | Processing information |
+| Retrieval | `page_number`, `chunk_index` | Source traceability |
+
+Timestamps use UTC (`datetime.now(timezone.utc)`) to avoid inconsistency across distributed systems.
+
+### 3. Document lifecycle
+
+| Stage | Description |
+| --- | --- |
+| Uploaded | Document received |
+| Processing | Extracted and normalized |
+| Validated | Content and metadata validated |
+| Indexed | Chunks and embeddings stored |
+| Active | Available for retrieval |
+| Updated | New version received |
+| Archived | No longer active |
+| Deleted | Removed per retention policy |
+
+A document must not become searchable until ingestion and indexing succeed.
+
+### 4. Identity and duplicate detection
+
+**Document identity** (which logical business document) and **content identity** (identical file bytes) are distinct. SHA-256 hashes of file bytes detect exact duplicates with extremely high confidence, but cannot detect semantic duplicates — files with different formatting but the same information.
+
+### 5. Version management
+
+Keep a stable logical document ID, give each revision its own version, preserve its content hash, maintain publication and effective dates, never mix chunks from different versions, and block archived versions from normal retrieval. For the refund-policy example, version 1 (30 days) is archived and version 2 (45 days) is active — history is preserved while retrieval uses only the active version.
+
+### 6. Chunk traceability
+
+Every chunk records its `document_id`, `version_id`, `chunk_index`, and metadata (department, source, page number, status). This enables source citations, document-level filtering, version-specific retrieval, document deletion, and audit trails.
+
+### 7. Hands-on lab: metadata and lifecycle management
+
+The lab extends the Python project with a `metadata` package (`models.py`, `hashing.py`, `validation.py`, `duplicate_detection.py`), a `lifecycle/service.py`, and matching tests.
+
+| Component | Behavior |
+| --- | --- |
+| `DocumentMetadata` | Dataclass with identity, file type, content hash, version (default 1), status (default `processing`), optional department/owner/tenant, UTC timestamps, and an `extra` dict |
+| Hashing | `calculate_content_hash` hashes original bytes; `calculate_text_hash` hashes stripped UTF-8 text |
+| Validation | Requires document id, title, content hash, and positive version; validates status (`processing`, `indexed`, `active`, `archived`, `failed`) and access level (`public`, `internal`, `confidential`, `restricted`) |
+| `DocumentLifecycleService` | In-memory store keyed by `document_id:version`; `register` validates and rejects duplicate versions; `activate` promotes an indexed version and archives the previous version |
+| Duplicate detection | `find_duplicate` scans a list for a matching content hash; production uses a database index instead |
+
+Activation and archival must be atomic in persistent storage in production, with a constraint allowing only one active version per logical document. Verification: `uv run pytest` and `uv run ruff check .`.
+
+### 8. Production lifecycle architecture
+
+**Document Uploaded → Calculate Content Hash → Duplicate? (yes: skip or link existing; no: continue) → Extract and Normalize → Validate Metadata → Chunk Document → Generate Embeddings → Store Chunks and Vectors → Validate Indexing → Activate New Version → Archive Previous Version.** The new version is activated only after indexing succeeds.
+
+### 9. Enterprise design considerations
+
+| Concern | Design approach |
+| --- | --- |
+| Duplicate files | SHA-256 content hashes |
+| Document updates | Version management |
+| Outdated content | Active-version filtering |
+| Source traceability | Document and chunk IDs |
+| Tenant isolation | Tenant metadata and database enforcement |
+| Confidentiality | Authorization-aware retrieval |
+| Document deletion | Cascading index cleanup |
+| Auditability | Lifecycle event history |
+
+**Critical security point:** metadata filtering is not authorization. Access control must be enforced by trusted server-side identity and authorization logic before chunks are returned.
